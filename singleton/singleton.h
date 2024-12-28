@@ -18,10 +18,15 @@ Version history
 
 #include <memory>
 #include <mutex>
+#include <type_traits>
 
 template<class SingletonClass>
 class SingletonTemplate
 {
+    // 静态断言，确保 SingletonClass 可以被默认构造
+    static_assert(std::is_default_constructible<SingletonClass>::value,
+                  "SingletonClass must be default constructible");
+
 public:
     // 构造，析构暂无特殊操作
 
