@@ -11,7 +11,7 @@ set(Utils_ROOTDIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_CURRENT_SOURCE_DIR}/bin)
   
 # 添加源代码文件  
-file(GLOB_RECURSE SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")  
+file(GLOB_RECURSE SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test_threadpool.cpp")  
   
 # 添加头文件目录(测试不同头文件修改此处)  
 include_directories(${Utils_ROOTDIR}

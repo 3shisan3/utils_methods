@@ -38,7 +38,7 @@ using string = std::wstring;
 #    define _U(x) L##x
 #  endif
 #else
-using string = std::u16string;
+using string = std::u16string;    /////// 需注意,后文string并非std::string //// 可结合上文两个内联函数转换输入输出
 #include <uchar.h>
 #  ifndef _U
 #    define _U(x) u##x
