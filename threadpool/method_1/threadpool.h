@@ -14,6 +14,9 @@ Version history
 
 *****************************************************************/
 
+#ifndef _THREADPOOL_H_
+#define _THREADPOOL_H_
+
 #include <iostream>
 #include <vector>
 #include <queue>
@@ -105,3 +108,5 @@ inline ThreadPool::~ThreadPool()
     for (std::thread &worker : workers)
         worker.join();
 }
+
+#endif  // _THREADPOOL_H_
