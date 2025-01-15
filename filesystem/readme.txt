@@ -1,5 +1,5 @@
 用途：
-    C17标准库开始支持filesystem,此用于在C17一下场景的实现替换
+    C17标准库开始支持filesystem,此用于在C17以下场景的实现，替换使用
 
 来源：
     https://github.com/gulrak/filesystem/tree/master/include/ghc
