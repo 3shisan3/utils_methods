@@ -11,8 +11,8 @@ set(Utils_ROOTDIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_CURRENT_SOURCE_DIR}/bin)
   
 # 添加源代码文件  
-file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test1_threadpool.cpp
-                          ${Utils_ROOTDIR}/threadpool/method_2/c/*.cc
+file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_scopeguard.cpp
+                        #   ${Utils_ROOTDIR}/threadpool/method_2/c/*.cc
 )  
   
 # 添加头文件目录(测试不同头文件修改此处)  
