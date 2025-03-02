@@ -10,6 +10,7 @@ Version history
 
 [序号]    |   [修改日期]  |   [修改者]   |   [修改内容]
 1             2023-8-28      cjx        create
+2             2025-3-02      cjx        兼容无默认构造函数场景
 
 *****************************************************************/
 
@@ -21,34 +22,48 @@ Version history
 #include <type_traits>
 
 template<class SingletonClass>
-class SingletonTemplate
+class SingletonTemplate final   // 增加final标记，防止继承使用出现违背单例行为的操作
 {
-    // 静态断言，确保 SingletonClass 可以被默认构造
-    static_assert(std::is_default_constructible<SingletonClass>::value,
-                  "SingletonClass must be default constructible");
-
 public:
-    // 构造，析构暂无特殊操作
+    // 删除拷贝构造函数和拷贝赋值运算符
+    SingletonTemplate(const SingletonTemplate&) = delete;
+    SingletonTemplate& operator=(const SingletonTemplate&) = delete;
 
     /**
      * @brief 获取单例
      *
      * @return 
      */
-    static std::shared_ptr<SingletonClass> &getSingletonInstance()
+    static SingletonClass &getSingletonInstance()
     {
         std::call_once(m_s_singleFlag, [&] {
             m_s_pSingletonInstance.reset(new SingletonClass());
         });
 
-        return m_s_pSingletonInstance;
+        return *m_s_pSingletonInstance;
     }
+
+    // 移除默认构造检查
+    template<typename... Args>
+    static SingletonClass &getSingletonInstance(Args&&... args)
+    {
+        std::call_once(m_s_singleFlag, [&] {
+            m_s_pSingletonInstance.reset(new SingletonClass(std::forward<Args>(args)...));
+        });
+
+        return *m_s_pSingletonInstance;
+    }
+
+protected:
+    // 保护构造函数和析构函数，防止外部实例化或删除
+    SingletonTemplate() = default;
+    ~SingletonTemplate() = default;
 
 private:
     /**
      * @brief 单例的静态指针
      */
-    static std::shared_ptr<SingletonClass> m_s_pSingletonInstance;
+    static std::unique_ptr<SingletonClass> m_s_pSingletonInstance;
 
     /**
      * @brief 执行一次触发标志
@@ -57,7 +72,7 @@ private:
 };
 
 template<class SingletonClass>
-std::shared_ptr<SingletonClass> SingletonTemplate<SingletonClass>::m_s_pSingletonInstance = nullptr;
+std::unique_ptr<SingletonClass> SingletonTemplate<SingletonClass>::m_s_pSingletonInstance = nullptr;
 
 template<class SingletonClass>
 std::once_flag SingletonTemplate<SingletonClass>::m_s_singleFlag;
