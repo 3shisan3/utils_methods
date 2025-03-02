@@ -13,8 +13,8 @@ Version history
 
 *****************************************************************/
 
-#ifndef _PTHRDPOOL_H_
-#define _PTHRDPOOL_H_
+#ifndef PTHRDPOOL_H_
+#define PTHRDPOOL_H_
 
 #include <stddef.h>
 #include <pthread.h>
@@ -98,4 +98,4 @@ void threadpool_destroy(void (*pending)(const struct threadpool_task *),
 }
 #endif
 
-#endif  // _PTHRDPOOL_H_
+#endif  // PTHRDPOOL_H_

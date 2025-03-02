@@ -14,8 +14,8 @@ Version history
 
 *****************************************************************/
 
-#ifndef _SINGLETON_H_
-#define _SINGLETON_H_
+#ifndef SINGLETON_H_
+#define SINGLETON_H_
 
 #include <memory>
 #include <mutex>

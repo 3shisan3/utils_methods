@@ -13,8 +13,8 @@ Version history
 
 *****************************************************************/
 
-#ifndef _LRU_H
-#define _LRU_H
+#ifndef LRU_H_
+#define LRU_H_
 
 #include <ctime>
 #include <list>
@@ -256,4 +256,4 @@ protected:
     time_t m_maxTimeSpan; /**< 最大时间间隔 */
 };
 
-#endif // _LRU_H
+#endif // LRU_H_
