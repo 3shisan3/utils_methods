@@ -1,5 +1,7 @@
 #include "imageProcess.h"
 
+#include <iostream>
+
 namespace cvbag
 {
 
@@ -179,7 +181,7 @@ int otsuThreshold(const cv::Mat &image, cv::Mat &dst)
     return 0;
 }
 
-int cvbag::fixedThreshold(const cv::Mat &image, cv::Mat &dst,
+int fixedThreshold(const cv::Mat &image, cv::Mat &dst,
                           int th, int mode, int maxval)
 {
     if (isImageEmpty(image, "threshold"))
@@ -246,8 +248,7 @@ int morphOpen(const cv::Mat &binaryImage, cv::Mat &dst, int ksize, int kernelMod
     return dilate(temp, dst, ksize, kernelMode);
 }
 
-int cvbag::erode(const cv::Mat &binaryImage, cv::Mat &dst,
-                 int ksize, int kernelMode)
+int erode(const cv::Mat &binaryImage, cv::Mat &dst, int ksize, int kernelMode)
 {
     // 参数验证
     if (isImageEmpty(binaryImage, "erode"))
@@ -273,8 +274,7 @@ int cvbag::erode(const cv::Mat &binaryImage, cv::Mat &dst,
     return 0;
 }
 
-int cvbag::close(const cv::Mat &binaryImage, cv::Mat &dst,
-                 int ksize, int kernelMode)
+int close(const cv::Mat &binaryImage, cv::Mat &dst, int ksize, int kernelMode)
 {
     // 参数验证
     if (isImageEmpty(binaryImage, "close"))

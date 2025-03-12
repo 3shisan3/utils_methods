@@ -32,9 +32,14 @@ mv "opencv-${OPENCV_VERSION}" opencv
 CMAKE_OPTIONS=(
     -DCMAKE_BUILD_TYPE=Release
     -DCMAKE_INSTALL_PREFIX="$SCRIPT_DIR/$INSTALL_DIR"  # 使用绝对路径
-    -DBUILD_LIST=core,imgproc,imgcodecs  # 按需添加模块（减少编译时间）
+    -DBUILD_LIST=core,highgui,imgproc,imgcodecs  # 按需添加模块（减少编译时间）
     -DBUILD_EXAMPLES=OFF
     -DBUILD_TESTS=OFF
+
+    # 可选：强制启用 GUI 支持
+    -DWITH_GTK=ON
+    -DWITH_GTK_2_X=OFF
+    -DWITH_QT=OFF
 
     # 设置 RPATH 相关参数
     -DCMAKE_INSTALL_RPATH="$ORIGIN"          # 使用相对路径 `$ORIGIN`（Linux）或 `@loader_path`（macOS）
