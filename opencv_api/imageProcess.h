@@ -48,6 +48,17 @@ int getAllImagePath(const std::string &folder,
                     std::vector<cv::String> &imagePathList,
                     bool recursive = false);
 
+/**
+ * @brief 保存图像到本地文件
+ * @param image 输入图像 (支持所有OpenCV可写格式)
+ * @param filePath 保存路径 (需包含扩展名如 .jpg, .png)
+ * @param params 编码参数 (可选，如JPEG质量参数等)
+ * @return 0-成功，-1-输入为空，-2-路径无效，-3-编码失败
+ */
+int saveImage(const cv::Mat &image, 
+              const std::string &filePath,
+              const std::vector<int>& params = {});
+
 //-------------------------------------- 图像显示 --------------------------------------
 
 /**

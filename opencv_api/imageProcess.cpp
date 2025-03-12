@@ -1,6 +1,8 @@
 #include "imageProcess.h"
 
 #include <iostream>
+#include <filesystem>   // 需要C++17支持，项目其他method有提供C11下的封装
+#include <set>
 
 namespace cvbag
 {
@@ -40,6 +42,58 @@ int getAllImagePath(const std::string &folder,
         std::cerr << "OpenCV Exception: " << e.what() << std::endl;
         return -1;
     }
+    return 0;
+}
+
+int saveImage(const cv::Mat &image,
+              const std::string &filePath,
+              const std::vector<int> &params)
+{
+    // 检查输入图像有效性
+    if (isImageEmpty(image, "saveImage"))
+        return -1;
+
+    // 验证文件路径格式
+    if (filePath.empty() || filePath.find('.') == std::string::npos)
+    {
+        std::cerr << "Error: Invalid file path format: " << filePath << std::endl;
+        return -2;
+    }
+
+    // 提取文件扩展名并转换为大写
+    std::string ext = filePath.substr(filePath.find_last_of('.') + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
+
+    // 检查支持的格式（基于OpenCV文档）
+    const std::set<std::string> supportedFormats = {"PNG", "JPG", "JPEG", "BMP", "TIFF"};
+    if (supportedFormats.find(ext) == supportedFormats.end())
+    {
+        std::cerr << "Error: Unsupported image format: " << ext << std::endl;
+        return -2;
+    }
+
+    // 创建父目录（如果不存在）
+    std::filesystem::path pathObj(filePath);
+    if (!std::filesystem::exists(pathObj.parent_path()))
+    {
+        std::error_code ec;
+        if (!std::filesystem::create_directories(pathObj.parent_path(), ec))
+        {
+            std::cerr << "Error: Failed to create directory: "
+                      << pathObj.parent_path() << " (" << ec.message() << ")" << std::endl;
+            return -2;
+        }
+    }
+
+    // 尝试保存图像
+    bool success = cv::imwrite(filePath, image, params);
+    if (!success)
+    {
+        std::cerr << "Error: Failed to write image to " << filePath << std::endl;
+        return -3;
+    }
+
+    std::cout << "Image saved to: " << std::filesystem::absolute(filePath) << std::endl;
     return 0;
 }
 

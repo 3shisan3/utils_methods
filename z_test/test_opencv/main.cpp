@@ -7,6 +7,28 @@ const std::string testImgPath = "../res/Yuan Shen 原神 Screenshot 2025.01.29 -
 
 using namespace cvbag;
 
+// 测试保存功能
+void testSaveFunctions(const cv::Mat &src)
+{
+    // 保存原始图像
+    int ret = saveImage(src, "output/original.jpg", {cv::IMWRITE_JPEG_QUALITY, 95});
+    if (ret != 0)
+    {
+        std::cerr << "保存原始图像失败，错误码: " << ret << std::endl;
+    }
+
+    // 保存处理后的图像
+    cv::Mat processed;
+    if (sobelXY(src, processed, 3) == 0)
+    {
+        ret = saveImage(processed, "output/edges.png", {cv::IMWRITE_PNG_COMPRESSION, 9});
+        if (ret != 0)
+        {
+            std::cerr << "保存边缘检测结果失败，错误码: " << ret << std::endl;
+        }
+    }
+}
+
 int main()
 {
 
@@ -85,6 +107,9 @@ int main()
     {
         std::cerr << "Gamma校正失败!" << std::endl;
     }
+
+    // 测试保存功能
+    testSaveFunctions(src);
 
     return 0;
 }
