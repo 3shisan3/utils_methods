@@ -111,6 +111,8 @@ static inline uint64_t rev_slice(uint64_t chunk, uint8_t slice)
 // 初始化单层表（基础表）
 void _crc_init_single_table(uint64_t *table, const CRCParams *params)
 {
+    const uint64_t mask = (1ULL << params->width) - 1;
+
     for (int n = 0; n < 256; n++)
     {
         uint8_t byte = (params->ref_in) ? reflect_byte(n) : n;
@@ -130,8 +132,7 @@ void _crc_init_single_table(uint64_t *table, const CRCParams *params)
 
         // 应用输出反射和掩码
         // crc = (params->ref_out) ? crc_reflect(crc, params->width) : crc;     // 移到计算阶段
-        crc &= (1ULL << params->width) - 1;
-        table[n] = crc;
+        table[n] = crc & mask;
     }
 }
 
@@ -141,6 +142,7 @@ void crc_table_init(uint64_t table[][256], const CRCParams *params)
     // 生成基础表（第0层）
     _crc_init_single_table(table[0], params);
 
+    const uint64_t mask = (1ULL << params->width) - 1;
     // 生成多层表（第1~N层）
     for (int layer = 1; layer < params->slice_level; layer++)
     {
@@ -164,8 +166,8 @@ void crc_table_init(uint64_t table[][256], const CRCParams *params)
                     crc <<= 1;
                 }
             } */
-            crc &= (1ULL << params->width) - 1;
-            table[layer][n] = crc;
+
+            table[layer][n] = crc & mask;
         }
     }
 
@@ -223,7 +225,7 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
         if (params->width < 64)
         {
             aligned_chunk <<= (64 - params->width);                                 // 左移到高位
-            aligned_chunk &= ((1ULL << params->width) - 1) << (64 - params->width); // 仅保留有效位
+            aligned_chunk &= mask << (64 - params->width); // 仅保留有效位
         }
         crc ^= aligned_chunk;                                                       // 直接异或有效位
 
