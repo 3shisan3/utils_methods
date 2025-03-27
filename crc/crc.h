@@ -19,6 +19,8 @@ Version history
 
 #include <stdint.h>
 
+
+/* 使用前必须提前调用初始化一次（不在获取接口中做检测） */
 void crcTable_init(void);
 
 /**
