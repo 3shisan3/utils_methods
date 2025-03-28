@@ -1,6 +1,7 @@
 #include "crc.h"
 
 #include <stdbool.h>
+#include <string.h>
 
 /* 常用CRC配置表
     CRC类型	       width	 poly	        init	    ref_in    ref_out    xor_out
@@ -36,13 +37,14 @@ typedef struct
 // 反射data的低width位（用于CRC整体反射）
 static inline uint_fast64_t crc_reflect(uint_fast64_t data, uint8_t width)
 {
-    uint_fast64_t reflected = 0;
-    data &= (1ULL << width) - 1;                                // 确保仅处理低width位
-    for (uint8_t i = 0; i < width; i++)
-    {
-        reflected |= ((data >> i) & 1) << (width - 1 - i);      // 逐位反转
+    uint_fast64_t ret = data & 0x01;                            // 取最低位
+
+    for (size_t i = 1; i < width; i++) {
+        data >>= 1;
+        ret = (ret << 1) | (data & 0x01);                       // 左移并拼接下一位
     }
-    return reflected;
+
+    return ret;
 }
 
 // 反射单个字节（8位）
@@ -111,7 +113,7 @@ static inline uint64_t rev_slice(uint64_t chunk, uint8_t slice)
 // 初始化单层表（基础表）
 void _crc_init_single_table(uint64_t *table, const CRCParams *params)
 {
-    const uint64_t mask = (1ULL << params->width) - 1;
+    const uint64_t mask = ((1ULL << (params->width - 1)) - 1) << 1 + 1;     // 排除width64位时位运算超出范围
 
     for (int n = 0; n < 256; n++)
     {
@@ -192,7 +194,7 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
 {
     const uint8_t *next = (const uint8_t *)data;
     uint64_t crc = params->init;
-    const uint64_t mask = (1ULL << params->width) - 1;
+    const uint64_t mask = ((1ULL << (params->width - 1)) - 1) << 1 + 1;
     const uint8_t slice = params->slice_level;
 
     // 处理未对齐的头部字节
@@ -225,7 +227,7 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
         if (params->width < 64)
         {
             aligned_chunk <<= (64 - params->width);                                 // 左移到高位
-            aligned_chunk &= mask << (64 - params->width); // 仅保留有效位
+            aligned_chunk &= mask << (64 - params->width);                          // 仅保留有效位
         }
         crc ^= aligned_chunk;                                                       // 直接异或有效位
 

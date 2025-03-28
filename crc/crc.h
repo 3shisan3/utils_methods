@@ -19,6 +19,9 @@ Version history
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* 使用前必须提前调用初始化一次（不在获取接口中做检测） */
 void crcTable_init(void);
@@ -37,3 +40,8 @@ uint16_t crc16(uint16_t crc, const unsigned char *buf, uint64_t len);
 uint32_t crc32(uint32_t crc, const unsigned char *buf, uint64_t len);
 
 uint64_t crc64(uint64_t crc, const unsigned char *buf, uint64_t len);
+
+
+#ifdef __cplusplus
+}
+#endif
