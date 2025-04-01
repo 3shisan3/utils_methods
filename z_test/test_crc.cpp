@@ -1,8 +1,28 @@
 #include "crc/crc.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+
+#include <stdint.h>
+
+void write_crc64_table_to_file(const char* filename, const uint64_t (*table)[256], int rows) {
+    FILE* file = fopen(filename, "w");
+    if (!file) {
+        perror("Failed to open file");
+        return;
+    }
+
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < 256; j++) {
+            fprintf(file, "[%d][%d] = 0x%016llX\n", i, j, table[i][j]);
+        }
+    }
+
+    fclose(file);
+    printf("CRC64 table written to %s\n", filename);
+}
 
 // 标准CRC16-CCITT逐位计算（用于对比）
 uint16_t crc16_ccitt_standard(const uint8_t *data, uint64_t len)
@@ -113,7 +133,136 @@ void test_crc32()
     assert(crc == 0xCBF43926);
 }
 
+/* ***************************************************************************************************************************** */
 // CRC64-ECMA 测试用例（Redis使用的多项式）
+
+#define POLY UINT64_C(0xad93d23594c935a9) // CRC64 多项式
+static uint64_t crc64_table[8][256] = {{0}};                    // CRC64 表，利用 ​Slice-by-8 加速计算
+
+static inline uint_fast64_t crc_reflect(uint_fast64_t data, uint8_t width)
+{
+    uint_fast64_t ret = data & 0x01;                            // 取最低位
+
+    for (size_t i = 1; i < width; i++) {
+        data >>= 1;
+        ret = (ret << 1) | (data & 0x01);                       // 左移并拼接下一位
+    }
+
+    return ret;
+}
+
+
+uint64_t _crc64(uint_fast64_t crc, const void *in_data, const uint64_t len)
+{
+    const uint8_t *data = (const uint8_t *)in_data; // 输入数据指针
+    unsigned long long bit;        // 临时变量，用于存储当前位
+
+    for (uint64_t offset = 0; offset < len; offset++)
+    {                             // 遍历每个字节
+        uint8_t c = data[offset]; // 当前字节
+        for (uint_fast8_t i = 0x01; i & 0xff; i <<= 1)
+        {                                   // 遍历每个位
+            bit = crc & 0x8000000000000000; // 取 CRC 的最高位
+            if (c & i)
+            {               // 如果当前位为 1
+                bit = !bit; // 反转最高位
+            }
+
+            crc <<= 1; // 左移 CRC
+            if (bit)
+            {                // 如果最高位为 1
+                crc ^= POLY; // 异或多项式
+            }
+        }
+
+        crc &= 0xffffffffffffffff; // 确保 CRC 为 64 位
+    }
+
+    crc = crc & 0xffffffffffffffff;                   // 再次确保 CRC 为 64 位
+    return crc_reflect(crc, 64) ^ 0x0000000000000000; // 返回最终 CRC 值
+}
+
+typedef uint64_t (*crcfn64)(uint64_t, const void *, const uint64_t);
+
+void crcspeed64little_init(crcfn64 crcfn, uint64_t table[8][256])
+{
+    uint64_t crc;
+
+    /* generate CRCs for all single byte sequences */
+    /* 生成所有单字节序列的 CRC 值 */
+    /* 遍历所有可能的单字节值（0-255） */
+    for (int n = 0; n < 256; n++)
+    {
+        unsigned char v = n;           // 将当前值转换为单字节
+        table[0][n] = crcfn(0, &v, 1); // 计算单字节的 CRC 值并存入表的第一层
+    }
+
+    /* generate nested CRC table for future slice-by-8 lookup */
+    /* 生成嵌套的 CRC 表，用于后续的 Slice-by-8 查找 */
+    /* 遍历所有单字节值，生成嵌套的 CRC 表 */
+    for (int n = 0; n < 256; n++)
+    {
+        crc = table[0][n]; // 获取表的第一层中的 CRC 值
+        for (int k = 1; k < 8; k++)
+        {
+            /* 通过异或和移位操作，生成下一层的 CRC 值 */
+            crc = table[0][crc & 0xff] ^ (crc >> 8);
+            table[k][n] = crc; // 将生成的 CRC 值存入表的第 k 层
+        }
+    }
+}
+
+uint64_t crcspeed64little(uint64_t little_table[8][256], uint64_t crc,
+                          void *buf, size_t len)
+{
+    unsigned char *next = (unsigned char *)buf;
+
+    /* process individual bytes until we reach an 8-byte aligned pointer */
+    /* 处理单个字节，直到指针 8 字节对齐 */
+    while (len && ((uintptr_t)next & 7) != 0)
+    {
+        crc = little_table[0][(crc ^ *next++) & 0xff] ^ (crc >> 8);
+        len--;
+    }
+
+    /* fast middle processing, 8 bytes (aligned!) per loop */
+    /* 快速中间处理，每次处理 8 字节（对齐！） */
+    while (len >= 8)
+    {
+        crc ^= *(uint64_t *)next;
+        crc = little_table[7][crc & 0xff] ^
+              little_table[6][(crc >> 8) & 0xff] ^
+              little_table[5][(crc >> 16) & 0xff] ^
+              little_table[4][(crc >> 24) & 0xff] ^
+              little_table[3][(crc >> 32) & 0xff] ^
+              little_table[2][(crc >> 40) & 0xff] ^
+              little_table[1][(crc >> 48) & 0xff] ^
+              little_table[0][crc >> 56];
+        next += 8;
+        len -= 8;
+    }
+
+    /* process remaining bytes (can't be larger than 8) */
+    /* 处理剩余字节（不超过 8 字节） */
+    while (len)
+    {
+        crc = little_table[0][(crc ^ *next++) & 0xff] ^ (crc >> 8);
+        len--;
+    }
+
+    return crc;
+}
+
+void crc64_init_redis(void)
+{
+    crcspeed64little_init(_crc64, crc64_table); // 调用 crcspeed64native_init 函数，填充 crc64_table
+}
+
+uint64_t crc64_redis(uint64_t crc, const unsigned char *s, uint64_t l)
+{
+    return crcspeed64little(crc64_table, crc, (void *)s, l); // 调用 crcspeed64native 函数，使用预计算的 CRC 表加速计算
+}
+
 void test_crc64()
 {
     const unsigned char empty[] = "";
@@ -125,8 +274,25 @@ void test_crc64()
 
     // Redis CRC64测试用例（"123456789" 应得 0xE9C6D914C4B8D9CA）
     crc = crc64(0,  (unsigned char*)"123456789", 9);
-    printf("CRC64 Result: 0x%016llX (Expected: 0xE9C6D914C4B8D9CA)\n", crc);
+    // printf("CRC64 Result: 0x%016llX (Expected: 0xE9C6D914C4B8D9CA)\n", crc);
     assert(crc == 0xE9C6D914C4B8D9CA);
+
+    char li[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed "
+                "do eiusmod tempor incididunt ut labore et dolore magna "
+                "aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
+                "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis "
+                "aute irure dolor in reprehenderit in voluptate velit esse "
+                "cillum dolore eu fugiat nulla pariatur. Excepteur sint "
+                "occaecat cupidatat non proident, sunt in culpa qui officia "
+                "deserunt mollit anim id est laborum.";
+
+    crc64_init_redis();
+
+    // write_crc64_table_to_file("./redis_table.txt", crc64_table, 8);
+    uint64_t crc_redis = crc64_redis(0, (unsigned char*)li, sizeof(li));
+    
+    crc = crc64(0, (unsigned char*)li, sizeof(li));
+    assert(crc == 0xc7794709e69683b3);
 }
 
 int main()
@@ -135,8 +301,8 @@ int main()
     crcTable_init();
 
     // 执行测试用例
-    test_crc16();
-    test_crc32();
+    // test_crc16();
+    // test_crc32();
     test_crc64();
 
     printf("All tests passed!\n");

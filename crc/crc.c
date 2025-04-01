@@ -3,6 +3,26 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include <stdio.h>
+#include <stdint.h>
+
+void write_crc64_table_to_file(const char* filename, const uint64_t (*table)[256], int rows) {
+    FILE* file = fopen(filename, "w");
+    if (!file) {
+        perror("Failed to open file");
+        return;
+    }
+
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < 256; j++) {
+            fprintf(file, "[%d][%d] = 0x%016llX\n", i, j, table[i][j]);
+        }
+    }
+
+    fclose(file);
+    printf("CRC64 table written to %s\n", filename);
+}
+
 /* 常用CRC配置表
     CRC类型	       width	 poly	               init	                ref_in    ref_out    xor_out
     CRC16-CCITT	    16	    0x1021	              0xFFFF	            false	  false	    0x0000
@@ -14,7 +34,7 @@
 
 // 预定义参数
 #define CRC16_POLY UINT16_C(0x1021)                             // redis中crc16使用的反转多项式
-#define CRC32_POLY UINT32_C(0x04c11db7)                         // 反转多项式 (IEEE 802.3 标准多项式)
+#define CRC32_POLY UINT32_C(0xedb88320)                         // 反转多项式 (IEEE 802.3 标准多项式)
 #define CRC64_POLY UINT64_C(0xad93d23594c935a9)                 // redis中crc64使用的反转多项式，与常规标准不同
 // #define CRCINIT_VALUE UINT64_C(0)
 
@@ -115,36 +135,38 @@ static inline uint64_t rev_slice(uint64_t chunk, uint8_t slice)
 // 初始化单层表（基础表）
 void _crc_init_single_table(uint64_t *table, const CRCParams *params)
 {
-    const uint64_t top_bit = 1ULL << (params->width - 1);
-    const uint64_t mask = ((1ULL << (params->width - 1)) - 1) << 1 + 1;     // 排除width 64位时位运算超出范围
-    uint64_t poly = params->poly;
-
-    // 如果输出需要反射，多项式需要先反射
-    if (params->ref_out)
-    {
-        poly = crc_reflect(poly, params->width);
-    }
+    const uint64_t max_bit = 1ULL << (params->width - 1);       // crc取最高位 与运算 常量
+    const uint64_t mask = (max_bit - 1) << 1 | 1;               // 排除width 64位时位运算超出范围
+    const uint64_t poly = params->poly;
 
     for (int n = 0; n < 256; n++)
     {
-        uint8_t byte = (params->ref_in) ? reflect_byte(n) : n;
-        uint64_t crc = (uint64_t)byte << (params->width - 8);
+        uint64_t table_crc_init = 0;
+        uint64_t top_bit;
 
-        for (int i = 0; i < 8; i++)
+        for (uint_fast8_t i = 0x01; i & 0xff; i <<= 1)
         {
-            if (crc & top_bit)
+            top_bit = table_crc_init & max_bit;
+            if (n & i)
             {
-                crc = (crc << 1) ^ poly;
+                top_bit = !top_bit;
             }
-            else
+
+            table_crc_init <<= 1;
+            if (top_bit)
             {
-                crc <<= 1;
+                table_crc_init ^= poly;
             }
+
+            table_crc_init &= mask;
         }
 
         // 应用输出反射和掩码
-        crc = (params->ref_out) ? crc_reflect(crc, params->width) : crc;
-        table[n] = (crc ^ params->xor_out) & mask;
+        if (params->ref_out)
+        {
+            table_crc_init = crc_reflect(table_crc_init, params->width) & mask;
+        }
+        table[n] = (table_crc_init ^ params->xor_out) & mask;
     }
 }
 
@@ -155,24 +177,21 @@ void crc_table_init(uint64_t table[][256], const CRCParams *params)
     _crc_init_single_table(table[0], params);
 
     const uint64_t mask = (params->width == 64) ? UINT64_MAX : ((1ULL << params->width) - 1);
+    uint64_t crc;
 
     // 生成多层表（第1~N层）
-    for (int layer = 1; layer < params->slice_level; layer++)
+    for (int n = 0; n < 256; n++)
     {
-        for (int n = 0; n < 256; n++)
+        // 方法1：查表法生成下一层
+        crc = table[0][n];                                                  // 获取表的第一层中的 CRC 值
+        for (int k = 1; k < params->slice_level; k++)
         {
-            uint64_t crc = table[layer - 1][n];
-
-            // 方法1：查表法生成下一层
-            for (int byte_pos = 0; byte_pos < layer; byte_pos++)
-            {
-                uint8_t idx = (crc >> (params->width - 8)) & 0xFF;
-                crc = (crc << 8) ^ table[0][idx];
-            }
-            // 方法2：逐位计算（效率低，兼容性保障）(同基础表生成方案)
-            table[layer][n] = crc & mask;
+            crc = table[0][crc & 0xff] ^ (crc >> 8);
+            table[k][n] = crc;                                              // 将生成的 CRC 值存入表的第 k 层
         }
+        // 方法2：逐位计算（效率低，兼容性保障）(同基础表生成方案)
     }
+
 
     /*  // 移到计算阶段
     // 若需生成大端表，反转所有条目
@@ -199,10 +218,9 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
     const uint8_t slice = params->slice_level;
 
     // 处理未对齐的头部字节, 先处理到 8 字节对齐 
-    while (len > 0 && (uintptr_t)next % slice != 0)
+    while (len && ((uintptr_t)next % slice) != 0)
     {
-        uint8_t byte = *next++;
-        crc = (crc << 8) ^ table[0][((crc >> (params->width - 8)) ^ byte) & 0xFF];
+        crc = table[0][(crc ^ *next++) & 0xFF] ^ (crc >> 8);
         crc &= mask;
         len--;
     }
@@ -210,13 +228,20 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
     // Slice-by-N快速处理（对齐块）
     while (len >= slice)
     {
+        /* crc ^= *(uint64_t *)next;
+        crc = table[7][crc & 0xff] ^
+              table[6][(crc >> 8) & 0xff] ^
+              table[5][(crc >> 16) & 0xff] ^
+              table[4][(crc >> 24) & 0xff] ^
+              table[3][(crc >> 32) & 0xff] ^
+              table[2][(crc >> 40) & 0xff] ^
+              table[1][(crc >> 48) & 0xff] ^
+              table[0][crc >> 56];
+        next += 8;
+        len -= 8; */
+
         uint64_t chunk = 0;
         memcpy(&chunk, next, slice);
-
-        if (!is_little_endian())
-        {
-            chunk = rev_slice(chunk, slice);
-        }
 
         // 统一的多层查表计算
         uint64_t combined = chunk ^ (crc << (64 - params->width));
@@ -236,8 +261,7 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
     // 处理剩余字节
     while (len--)
     {
-        uint8_t byte = *next++;
-        crc = (crc << 8) ^ table[0][((crc >> (params->width - 8)) ^ byte) & 0xFF];
+        crc = table[0][(crc ^ *next++) & 0xff] ^ (crc >> 8);
         crc &= mask;
     }
 
@@ -282,6 +306,8 @@ void crcTable_init(void)
         .slice_level = 8
     };
     crc_table_init(crc64_table, &crc64_params);
+
+    write_crc64_table_to_file("./owner_16table.txt", crc16_table, 2);
 }
 
 uint16_t crc16(uint16_t crc, const unsigned char *buf, uint64_t len)
