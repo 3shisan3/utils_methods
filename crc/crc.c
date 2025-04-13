@@ -3,39 +3,10 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include <stdio.h>
-#include <stdint.h>
-
-void write_crc64_table_to_file(const char* filename, const uint64_t (*table)[256], int rows) {
-    FILE* file = fopen(filename, "w");
-    if (!file) {
-        perror("Failed to open file");
-        return;
-    }
-
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < 256; j++) {
-            fprintf(file, "[%d][%d] = 0x%016llX\n", i, j, table[i][j]);
-        }
-    }
-
-    fclose(file);
-    printf("CRC64 table written to %s\n", filename);
-}
-
-/* 常用CRC配置表
-    CRC类型	       width	 poly	               init	                ref_in    ref_out    xor_out
-    CRC16-CCITT	    16	    0x1021	              0xFFFF	            false	  false	    0x0000
-    CRC16-REDIES    16      0x1021                0x0000                false     false     0x0000
-    CRC32	        32	    0x04C11DB7	          0xFFFFFFFF	        true	  true	    0xFFFFFFFF
-    CRC64-ECMA	    64	    0x42F0E1EA	          0x00000000	        false	  false	    0x00000000
-    CRC64-REDIES    64      0xad93d23594c935a9    0xffffffffffffffff    true      true      0x0000000000000000
- */
-
 // 预定义参数
-#define CRC16_POLY UINT16_C(0x1021)                             // redis中crc16使用的反转多项式
-#define CRC32_POLY UINT32_C(0xedb88320)                         // 反转多项式 (IEEE 802.3 标准多项式)
-#define CRC64_POLY UINT64_C(0xad93d23594c935a9)                 // redis中crc64使用的反转多项式，与常规标准不同
+#define CRC16_POLY UINT16_C(0x1021)                             // 
+#define CRC32_POLY UINT32_C(0xedb88320)                         // 
+#define CRC64_POLY UINT64_C(0xad93d23594c935a9)                 // 
 // #define CRCINIT_VALUE UINT64_C(0)
 
 static uint64_t crc64_table[8][256] = {{0}};                    // CRC64 表，利用 ​Slice-by-8 加速计算
@@ -139,34 +110,27 @@ void _crc_init_single_table(uint64_t *table, const CRCParams *params)
     const uint64_t mask = (max_bit - 1) << 1 | 1;               // 排除width 64位时位运算超出范围
     const uint64_t poly = params->poly;
 
-    for (int n = 0; n < 256; n++)
+    for (int i = 0; i < 256; ++i)
     {
-        uint64_t table_crc_init = 0;
-        uint64_t top_bit;
+        uint8_t byte = (uint8_t)i;
+        if (params->ref_in)
+            byte = reflect_byte(byte);
 
-        for (uint_fast8_t i = 0x01; i & 0xff; i <<= 1)
+        uint64_t crc = params->ref_in ? (uint64_t)byte : (uint64_t)byte << (params->width - 8);
+        for (int j = 0; j < 8; ++j)
         {
-            top_bit = table_crc_init & max_bit;
-            if (n & i)
+            if (params->ref_in)
             {
-                top_bit = !top_bit;
+                uint64_t bit = crc & 1;
+                crc = (crc >> 1) ^ (bit ? poly : 0);
             }
-
-            table_crc_init <<= 1;
-            if (top_bit)
+            else
             {
-                table_crc_init ^= poly;
+                uint64_t bit = crc & (1ULL << (params->width - 1));
+                crc = (crc << 1) ^ (bit ? poly : 0);
             }
-
-            table_crc_init &= mask;
         }
-
-        // 应用输出反射和掩码
-        if (params->ref_out)
-        {
-            table_crc_init = crc_reflect(table_crc_init, params->width) & mask;
-        }
-        table[n] = (table_crc_init ^ params->xor_out) & mask;
+        table[i] = crc & mask;
     }
 }
 
@@ -177,35 +141,17 @@ void crc_table_init(uint64_t table[][256], const CRCParams *params)
     _crc_init_single_table(table[0], params);
 
     const uint64_t mask = (params->width == 64) ? UINT64_MAX : ((1ULL << params->width) - 1);
-    uint64_t crc;
 
     // 生成多层表（第1~N层）
-    for (int n = 0; n < 256; n++)
+    for (int layer = 1; layer < params->slice_level; ++layer)
     {
-        // 方法1：查表法生成下一层
-        crc = table[0][n];                                                  // 获取表的第一层中的 CRC 值
-        for (int k = 1; k < params->slice_level; k++)
+        for (int i = 0; i < 256; ++i)
         {
-            crc = table[0][crc & 0xff] ^ (crc >> 8);
-            table[k][n] = crc;                                              // 将生成的 CRC 值存入表的第 k 层
+            uint64_t value = table[layer - 1][i];
+            uint8_t index = (value >> (params->width - 8)) & 0xFF;
+            table[layer][i] = ((value << 8) ^ table[0][index]) & mask;
         }
-        // 方法2：逐位计算（效率低，兼容性保障）(同基础表生成方案)
     }
-
-
-    /*  // 移到计算阶段
-    // 若需生成大端表，反转所有条目
-    if (!is_little_endian())
-    {
-        for (int k = 0; k < params->slice_level; k++)
-        {
-            for (int n = 0; n < 256; n++)
-            {
-                // 按实际位宽反转
-                table[k][n] = crc_reflect(table[k][n], params->width);
-            }
-        }
-    } */
 }
 
 /*** ============================== 快速计算函数 ============================== ***/
@@ -217,55 +163,74 @@ uint64_t crc_fast(const void *data, uint64_t len, uint64_t table[][256], const C
     const uint64_t mask = (params->width == 64) ? UINT64_MAX : ((1ULL << params->width) - 1);
     const uint8_t slice = params->slice_level;
 
-    // 处理未对齐的头部字节, 先处理到 8 字节对齐 
+    // 处理未对齐的头部字节, 先处理到 8 字节对齐
     while (len && ((uintptr_t)next % slice) != 0)
     {
-        crc = table[0][(crc ^ *next++) & 0xFF] ^ (crc >> 8);
-        crc &= mask;
+        uint8_t byte = *next++;
         len--;
+
+        if (params->ref_in)
+        {
+            byte = reflect_byte(byte);
+            uint8_t index = (crc ^ byte) & 0xFF;
+            crc = (crc >> 8) ^ table[0][index];
+        }
+        else
+        {
+            uint8_t index = ((crc >> (params->width - 8)) ^ byte) & 0xFF;
+            crc = (crc << 8) ^ table[0][index];
+        }
+        crc &= mask;
     }
 
     // Slice-by-N快速处理（对齐块）
     while (len >= slice)
     {
-        /* crc ^= *(uint64_t *)next;
-        crc = table[7][crc & 0xff] ^
-              table[6][(crc >> 8) & 0xff] ^
-              table[5][(crc >> 16) & 0xff] ^
-              table[4][(crc >> 24) & 0xff] ^
-              table[3][(crc >> 32) & 0xff] ^
-              table[2][(crc >> 40) & 0xff] ^
-              table[1][(crc >> 48) & 0xff] ^
-              table[0][crc >> 56];
-        next += 8;
-        len -= 8; */
-
-        uint64_t chunk = 0;
+        uint64_t chunk;
         memcpy(&chunk, next, slice);
-
-        // 统一的多层查表计算
-        uint64_t combined = chunk ^ (crc << (64 - params->width));
-        crc = 0;
-
-        for (int i = 0; i < slice; i++)
-        {
-            uint8_t idx = (combined >> (8 * (slice - 1 - i))) & 0xFF;
-            crc ^= table[i][idx];
-        }
-
         next += slice;
         len -= slice;
-        crc &= mask;
+
+        if (is_little_endian())
+            chunk = rev_slice(chunk, slice);
+
+        crc ^= chunk;
+
+        for (int i = 0; i < slice; ++i)
+        {
+            uint8_t index;
+            if (params->ref_in)
+                index = (crc >> (i * 8)) & 0xFF;
+            else
+                index = (crc >> (params->width - 8 - i * 8)) & 0xFF;
+            crc = table[i][index] ^ (params->ref_in ? (crc >> 8) : (crc << 8));
+            crc &= mask;
+        }
     }
 
     // 处理剩余字节
     while (len--)
     {
-        crc = table[0][(crc ^ *next++) & 0xff] ^ (crc >> 8);
+        uint8_t byte = *next++;
+
+        if (params->ref_in)
+        {
+            byte = reflect_byte(byte);
+            uint8_t index = (crc ^ byte) & 0xFF;
+            crc = (crc >> 8) ^ table[0][index];
+        }
+        else
+        {
+            uint8_t index = ((crc >> (params->width - 8)) ^ byte) & 0xFF;
+            crc = (crc << 8) ^ table[0][index];
+        }
         crc &= mask;
     }
 
     // 最终处理
+    if (params->ref_out)
+        crc = crc_reflect(crc, params->width);
+    crc ^= params->xor_out;
     return crc & mask;
 }
 
@@ -306,11 +271,9 @@ void crcTable_init(void)
         .slice_level = 8
     };
     crc_table_init(crc64_table, &crc64_params);
-
-    write_crc64_table_to_file("./owner_16table.txt", crc16_table, 2);
 }
 
-uint16_t crc16(uint16_t crc, const unsigned char *buf, uint64_t len)
+uint16_t crc16(const unsigned char *buf, uint64_t len, uint16_t crc)
 {
     static const CRCParams base_params = {
         .width = 16,
@@ -328,7 +291,7 @@ uint16_t crc16(uint16_t crc, const unsigned char *buf, uint64_t len)
     return crc_fast(buf, len, crc16_table, &crc16_params);
 }
 
-uint32_t crc32(uint32_t crc, const unsigned char *buf, uint64_t len)
+uint32_t crc32(const unsigned char *buf, uint64_t len, uint32_t crc)
 {
     static const CRCParams base_params = {
         .width = 32,
@@ -346,7 +309,7 @@ uint32_t crc32(uint32_t crc, const unsigned char *buf, uint64_t len)
     return crc_fast(buf, len, crc32_table, &crc32_params);
 }
 
-uint64_t crc64(uint64_t crc, const unsigned char *buf, uint64_t len)
+uint64_t crc64(const unsigned char *buf, uint64_t len, uint64_t crc)
 {
     static const CRCParams base_params = {
         .width = 64,
