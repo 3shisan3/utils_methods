@@ -5,4 +5,4 @@
     和注释一致
 
 来源：
-    接口设计，实现参考https://github.com/sogou/workflow中的实现（其中任务设计主要用于网络通信）
+    接口设计，实现参考 https://github.com/sogou/workflow 中的实现（其中任务设计主要用于网络通信）
