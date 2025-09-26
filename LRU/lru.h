@@ -10,6 +10,7 @@ Version history
 
 [序号]    |   [修改日期]  |   [修改者]   |   [修改内容]
 1             2023-8-28      cjx        create
+2             2025-9-27      cjx        迭代reset接口，增加永久保活判断
 
 *****************************************************************/
 
@@ -119,6 +120,22 @@ public:
     }
 
 public:
+    /**
+     * @brief 重置LRU缓存配置
+     * @param maxSize 最大容量，0表示不限制
+     * @param elasticity 弹性大小
+     * @param maxTimeSpan 最大存活时间(秒)，0表示不限制
+     */
+    void Reset(size_t maxSize, size_t elasticity, time_t maxTimeSpan)
+    {
+        Guard g(m_lock);
+        m_maxSize = maxSize;
+        m_elasticity = elasticity;
+        m_maxTimeSpan = maxTimeSpan;
+        ExpireCapacity();
+        ExpireTime();
+    }
+
     /**
      * 插入一个键值对（key，value）到缓存中，
      * @param key [in] 键
@@ -230,6 +247,11 @@ protected:
      */
     virtual void ExpireTime()
     {
+        if (0 == m_maxTimeSpan)
+        {
+            return;
+        }
+
         time_t now = std::time(nullptr);
         while (m_map.size() > 0)
         {
