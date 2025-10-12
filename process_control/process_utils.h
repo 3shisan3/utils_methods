@@ -2,7 +2,7 @@
 Copyright (c) 2022-2030, shisan233@sszc.live.
 SPDX-License-Identifier: MIT
 File:        process_utils.h
-Version:     1.0
+Version:     1.1
 Author:      cjx
 start date: 2025-10-10
 Description: 进程控制方法（子进程启动）
@@ -11,6 +11,7 @@ Version history
 
 [序号]    |   [修改日期]  |   [修改者]   |   [修改内容]
 1             2025-10-10      cjx           create
+2             2025-10-12      cjx           增强错误处理
 
 *****************************************************************/
 
@@ -26,9 +27,9 @@ class ProcessUtils
 public:
     /**
      * @brief 启动进程
-     * @param processPath 进程路径（为空时使用基于进程名的默认路径）
+     * @param processPath 进程路径（必须提供有效路径）
      * @param arguments 启动参数
-     * @param workingDir 工作目录
+     * @param workingDir 工作目录（为空时使用进程所在目录）
      * @param processName 进程名称（为空时从processPath提取）
      * @return 成功返回true，失败返回false
      */
@@ -150,5 +151,20 @@ private:
      * @return 进程名称，提取失败返回空字符串
      */
     static std::string extractProcessNameFromPath(const std::string &filePath);
+
+    /**
+     * @brief Linux专用：准备execvp参数
+     * @param processPath 进程路径
+     * @param arguments 参数列表
+     * @return 参数数组（需要调用者释放内存）
+     */
+    static std::vector<char*> prepareExecArgs(const std::string& processPath, 
+                                             const std::vector<std::string>& arguments);
+
+    /**
+     * @brief Linux专用：清理execvp参数内存
+     * @param args 参数数组
+     */
+    static void cleanupExecArgs(std::vector<char*>& args);
 };
 #endif // PROCESS_UTILS_H

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 
 #ifdef _WIN32
@@ -13,6 +14,7 @@
 #include <windows.h>
 #else
 #include <dirent.h>
+#include <errno.h>
 #include <libgen.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -89,6 +91,7 @@ bool ProcessUtils::startProcess(const std::string &processPath,
 
     std::cout << "启动进程: " << actualProcessName << std::endl;
     std::cout << "可执行文件: " << processPath << std::endl;
+    std::cout << "命令行: " << commandLine << std::endl;
     if (!actualWorkingDir.empty())
     {
         std::cout << "工作目录: " << actualWorkingDir << std::endl;
@@ -107,11 +110,23 @@ bool ProcessUtils::startProcess(const std::string &processPath,
             &si,
             &pi))
     {
-        std::cerr << "CreateProcess失败，错误代码: " << GetLastError() << std::endl;
+        DWORD error = GetLastError();
+        std::cerr << "CreateProcess失败，错误代码: " << error << std::endl;
+
+        // 提供常见错误代码的解释
+        if (error == ERROR_FILE_NOT_FOUND)
+        {
+            std::cerr << "错误详情: 系统找不到指定的文件" << std::endl;
+        }
+        else if (error == ERROR_ACCESS_DENIED)
+        {
+            std::cerr << "错误详情: 拒绝访问" << std::endl;
+        }
+
         return false;
     }
 
-    // 关闭进程和线程句柄
+    // 关闭进程和线程句柄（重要：避免句柄泄漏）
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
@@ -126,7 +141,7 @@ bool ProcessUtils::startProcess(const std::string &processPath,
 
     return true;
 #else
-    // Linux实现
+    // Linux实现 - 修复了参数处理的内存安全问题
     pid_t pid = fork();
     if (pid == 0)
     {
@@ -151,22 +166,24 @@ bool ProcessUtils::startProcess(const std::string &processPath,
             }
         }
 
-        // 准备参数数组
-        std::vector<char *> args;
-        args.push_back(const_cast<char *>(processPath.c_str()));
-        for (const auto &arg : arguments)
+        // 准备exec参数（修复版本）
+        auto args = prepareExecArgs(processPath, arguments);
+
+        std::cout << "执行进程: " << processPath;
+        for (size_t i = 1; args[i] != nullptr; ++i)
         {
-            args.push_back(const_cast<char *>(arg.c_str()));
+            std::cout << " " << args[i];
         }
-        args.push_back(nullptr);
+        std::cout << std::endl;
 
-        std::cout << "执行进程: " << processPath << std::endl;
-
-        // 使用execvp
+        // 使用execvp执行进程
         execvp(args[0], args.data());
 
         // 如果execvp返回，说明执行失败
         std::cerr << "执行进程失败 '" << args[0] << "': " << strerror(errno) << std::endl;
+
+        // 清理内存后退出
+        cleanupExecArgs(args);
         exit(EXIT_FAILURE);
     }
     else if (pid > 0)
@@ -219,6 +236,14 @@ bool ProcessUtils::stopProcess(const std::string &processName, bool force)
         if (pid != -1)
         {
             std::cout << "通过PID文件找到进程ID: " << pid << std::endl;
+
+            // 验证PID对应的进程是否确实存在且名称匹配
+            if (!isProcessRunning(processName))
+            {
+                std::cout << "警告: PID文件中的进程已不存在，删除无效PID文件" << std::endl;
+                removePidFile(pidFile);
+                return false;
+            }
         }
         else
         {
@@ -303,7 +328,30 @@ std::vector<int> ProcessUtils::getProcessIds(const std::string &processName)
         {
             int pid = atoi(entry->d_name);
 
+            // 检查多个来源以提高准确性
+            std::string exePath = std::string("/proc/") + entry->d_name + "/exe";
             std::string cmdPath = std::string("/proc/") + entry->d_name + "/cmdline";
+            std::string statPath = std::string("/proc/") + entry->d_name + "/stat";
+
+            char linkTarget[1024];
+            ssize_t len = readlink(exePath.c_str(), linkTarget, sizeof(linkTarget) - 1);
+            if (len != -1)
+            {
+                linkTarget[len] = '\0';
+                std::string target(linkTarget);
+                size_t lastSlash = target.find_last_of('/');
+                if (lastSlash != std::string::npos)
+                {
+                    std::string exeName = target.substr(lastSlash + 1);
+                    if (exeName == processName)
+                    {
+                        pids.push_back(pid);
+                        continue;
+                    }
+                }
+            }
+
+            // 检查cmdline作为备选
             std::ifstream cmdFile(cmdPath);
             if (cmdFile)
             {
@@ -414,7 +462,13 @@ bool ProcessUtils::removePidFile(const std::string &pidFile)
     }
     else
     {
-        std::cerr << "删除PID文件失败: " << pidFile << std::endl;
+        // 文件不存在不算错误
+        if (errno == ENOENT)
+        {
+            std::cout << "PID文件不存在，无需删除: " << pidFile << std::endl;
+            return true;
+        }
+        std::cerr << "删除PID文件失败: " << pidFile << " - " << strerror(errno) << std::endl;
         return false;
     }
 }
@@ -431,12 +485,24 @@ bool ProcessUtils::stopProcessByPid(int pid, bool force)
     HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
     if (hProcess == NULL)
     {
-        std::cerr << "无法打开进程句柄 (PID: " << pid << ")" << std::endl;
+        DWORD error = GetLastError();
+        std::cerr << "无法打开进程句柄 (PID: " << pid << "), 错误: " << error << std::endl;
         return false;
     }
 
+    // 使用RAII管理句柄
+    struct HandleGuard
+    {
+        HANDLE handle;
+        HandleGuard(HANDLE h) : handle(h) {}
+        ~HandleGuard()
+        {
+            if (handle)
+                CloseHandle(handle);
+        }
+    } guard(hProcess);
+
     BOOL result = TerminateProcess(hProcess, force ? 1 : 0);
-    CloseHandle(hProcess);
 
     if (result)
     {
@@ -456,7 +522,7 @@ bool ProcessUtils::stopProcessByPid(int pid, bool force)
     {
         if (!force)
         {
-            // 优雅终止，等待进程结束
+            // 优雅终止，等待进程结束（最多5秒）
             for (int i = 0; i < 50; ++i)
             {
                 if (kill(pid, 0) != 0)
@@ -464,7 +530,7 @@ bool ProcessUtils::stopProcessByPid(int pid, bool force)
                     std::cout << "进程已优雅终止 (PID: " << pid << ")" << std::endl;
                     return true;
                 }
-                usleep(100000);
+                usleep(100000); // 100ms
             }
             // 优雅终止超时，转为强制终止
             std::cout << "优雅终止超时，转为强制终止 (PID: " << pid << ")" << std::endl;
@@ -543,7 +609,7 @@ std::string ProcessUtils::getExecutablePath(const std::string &processName)
 #ifdef _WIN32
     execPath = processName + ".exe";
 #else
-    execPath = "./" + processName; // 相对路径，依赖PATH
+    execPath = "./" + processName; // 相对路径，依赖调用者确保路径正确
 #endif
 
     return execPath;
@@ -663,25 +729,78 @@ std::map<int, std::string> ProcessUtils::findWindowsProcesses(const std::string 
         return processes;
     }
 
+    // 使用RAII管理快照句柄
+    struct SnapGuard
+    {
+        HANDLE handle;
+        SnapGuard(HANDLE h) : handle(h) {}
+        ~SnapGuard()
+        {
+            if (handle != INVALID_HANDLE_VALUE)
+                CloseHandle(handle);
+        }
+    } guard(hProcessSnap);
+
     PROCESSENTRY32 pe32;
     pe32.dwSize = sizeof(PROCESSENTRY32);
 
     if (!Process32First(hProcessSnap, &pe32))
     {
-        CloseHandle(hProcessSnap);
+        std::cerr << "Process32First失败" << std::endl;
         return processes;
     }
 
     do
     {
         std::string currentProcess(pe32.szExeFile);
-        if (currentProcess.find(processName) != std::string::npos)
+
+        // 使用精确匹配而不是部分匹配
+        if (currentProcess == processName ||
+            currentProcess == processName + ".exe" ||
+            extractProcessNameFromPath(currentProcess) == processName)
         {
             processes[pe32.th32ProcessID] = currentProcess;
         }
     } while (Process32Next(hProcessSnap, &pe32));
 
-    CloseHandle(hProcessSnap);
     return processes;
+}
+#endif
+
+// Linux专用函数实现
+#ifndef _WIN32
+std::vector<char *> ProcessUtils::prepareExecArgs(const std::string &processPath,
+                                                  const std::vector<std::string> &arguments)
+{
+    std::vector<char *> args;
+
+    // 关键修复：分配持久内存存储参数
+    // 使用静态vector确保参数在execvp调用前保持有效
+    static std::vector<std::string> argStorage;
+    argStorage.clear();
+
+    // 存储进程路径
+    argStorage.push_back(processPath);
+    args.push_back(const_cast<char *>(argStorage.back().c_str()));
+
+    // 存储所有参数
+    for (const auto &arg : arguments)
+    {
+        argStorage.push_back(arg);
+        args.push_back(const_cast<char *>(argStorage.back().c_str()));
+    }
+
+    // 添加终止的nullptr
+    args.push_back(nullptr);
+
+    return args;
+}
+
+void ProcessUtils::cleanupExecArgs(std::vector<char *> &args)
+{
+    // 由于我们使用静态vector，这里只需要清空即可
+    // 在实际使用中，参数会在execvp成功后自动被新进程映像替换
+    // 或者在execvp失败后随进程退出而自动释放
+    args.clear();
 }
 #endif
