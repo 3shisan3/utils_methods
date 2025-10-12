@@ -152,6 +152,7 @@ private:
      */
     static std::string extractProcessNameFromPath(const std::string &filePath);
 
+#ifndef _WIN32
     /**
      * @brief Linux专用：准备execvp参数
      * @param processPath 进程路径
@@ -166,5 +167,6 @@ private:
      * @param args 参数数组
      */
     static void cleanupExecArgs(std::vector<char*>& args);
+#endif
 };
 #endif // PROCESS_UTILS_H

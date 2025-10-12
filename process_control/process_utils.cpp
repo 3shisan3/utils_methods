@@ -8,10 +8,11 @@
 #include <memory>
 #include <sstream>
 
+// Windows头文件必须在最前面，并且按照正确顺序包含
 #ifdef _WIN32
-#include <tchar.h>
-#include <tlhelp32.h>
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <tlhelp32.h>
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -331,7 +332,6 @@ std::vector<int> ProcessUtils::getProcessIds(const std::string &processName)
             // 检查多个来源以提高准确性
             std::string exePath = std::string("/proc/") + entry->d_name + "/exe";
             std::string cmdPath = std::string("/proc/") + entry->d_name + "/cmdline";
-            std::string statPath = std::string("/proc/") + entry->d_name + "/stat";
 
             char linkTarget[1024];
             ssize_t len = readlink(exePath.c_str(), linkTarget, sizeof(linkTarget) - 1);
@@ -718,18 +718,34 @@ std::string ProcessUtils::extractProcessNameFromPath(const std::string &filePath
 }
 
 #ifdef _WIN32
+
+// 宽字符串转ANSI字符串的辅助函数
+static std::string wstringToString(const std::wstring &wstr)
+{
+    if (wstr.empty())
+        return "";
+
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0)
+        return "";
+
+    std::string str(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), &str[0], size_needed, nullptr, nullptr);
+    return str;
+}
+
 std::map<int, std::string> ProcessUtils::findWindowsProcesses(const std::string &processName)
 {
     std::map<int, std::string> processes;
 
-    HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hProcessSnap == INVALID_HANDLE_VALUE)
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE)
     {
-        std::cerr << "创建进程快照失败" << std::endl;
+        std::cerr << "创建进程快照失败，错误代码: " << GetLastError() << std::endl;
         return processes;
     }
 
-    // 使用RAII管理快照句柄
+    // 使用RAII管理句柄
     struct SnapGuard
     {
         HANDLE handle;
@@ -737,31 +753,39 @@ std::map<int, std::string> ProcessUtils::findWindowsProcesses(const std::string 
         ~SnapGuard()
         {
             if (handle != INVALID_HANDLE_VALUE)
+            {
                 CloseHandle(handle);
+            }
         }
-    } guard(hProcessSnap);
+    } guard(hSnapshot);
 
-    PROCESSENTRY32 pe32;
-    pe32.dwSize = sizeof(PROCESSENTRY32);
+    PROCESSENTRY32W pe; // 明确使用宽字符版本
+    pe.dwSize = sizeof(PROCESSENTRY32W);
 
-    if (!Process32First(hProcessSnap, &pe32))
+    // 使用宽字符版本的Process32FirstW
+    if (Process32FirstW(hSnapshot, &pe))
     {
-        std::cerr << "Process32First失败" << std::endl;
-        return processes;
-    }
-
-    do
-    {
-        std::string currentProcess(pe32.szExeFile);
-
-        // 使用精确匹配而不是部分匹配
-        if (currentProcess == processName ||
-            currentProcess == processName + ".exe" ||
-            extractProcessNameFromPath(currentProcess) == processName)
+        do
         {
-            processes[pe32.th32ProcessID] = currentProcess;
-        }
-    } while (Process32Next(hProcessSnap, &pe32));
+            // 将宽字符转换为ANSI字符串
+            std::wstring wstrExeFile(pe.szExeFile);
+            std::string currentProcess = wstringToString(wstrExeFile);
+
+            std::string extractedName = extractProcessNameFromPath(currentProcess);
+
+            // 使用精确匹配
+            if (currentProcess == processName ||
+                currentProcess == processName + ".exe" ||
+                extractedName == processName)
+            {
+                processes[pe.th32ProcessID] = currentProcess;
+            }
+        } while (Process32NextW(hSnapshot, &pe));
+    }
+    else
+    {
+        std::cerr << "Process32FirstW失败，错误代码: " << GetLastError() << std::endl;
+    }
 
     return processes;
 }
