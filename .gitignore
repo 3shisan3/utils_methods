@@ -1,3 +1,8 @@
 .vscode
 build
 bin
+# Python 工具运行产物
+__pycache__/
+*.py[cod]
+/axure_rp_viewer/rp_output/
+/axure_rp_viewer/rp_gui_last.txt
